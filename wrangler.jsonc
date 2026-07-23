@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "github-readonly-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Durable Object that backs the MCP agent (session state for the streamable-HTTP transport).
+  // Binding name "MCP_OBJECT" matches McpAgent.serve()'s default.
+  "durable_objects": {
+    "bindings": [
+      { "name": "MCP_OBJECT", "class_name": "GitHubReadOnlyMCP" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GitHubReadOnlyMCP"] }
+  ],
+
+  // Required by @cloudflare/workers-oauth-provider to store grants/tokens (hashes only, no secrets).
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "002de4e8a49e4046bcdefe70e7ecc97a" }
+  ],
+
+  // Non-secret config. GITHUB_PAT and CONNECTOR_PASSWORD are set via `wrangler secret put`, not here.
+  "vars": {
+    "ALLOWED_REPOS": "jpalvarezb/bonafe,jpalvarezb/aimer"
+  }
+}

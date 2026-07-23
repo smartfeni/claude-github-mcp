@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars for local `wrangler dev` testing (never commit .dev.vars).
+# In production these are set with `wrangler secret put <NAME>`, not with wrangler.jsonc vars.
+
+GITHUB_PAT=github_pat_xxx_replace_me
+CONNECTOR_PASSWORD=choose-a-real-password-here
