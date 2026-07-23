@@ -106,10 +106,39 @@ export async function listIssues(env: Env, repo: string, state: "open" | "closed
     }));
 }
 
+// Splits `path` on "/" and rejects anything that could let the request
+// escape the `repo` segment of the GitHub contents URL: leading/interior
+// empty segments (a leading "/" or "//") and "." / ".." segments (which
+// `fetch`/`URL` would normalize, letting a path like
+// "../../../../repos/other-org/private-repo/contents/.env" reach a repo
+// that was never checked against ALLOWED_REPOS). Each surviving segment is
+// then encodeURIComponent-ed individually so characters like "/" or "?"
+// can't be smuggled back in through the segment itself, and rejoined with
+// literal "/" separators.
+//
+// An empty path is the repo root ("/repos/{repo}/contents/" lists it), and a
+// single trailing slash on a directory path (e.g. "src/") is tolerated -- both
+// are legitimate directory-listing inputs the get_file_contents tool advertises,
+// so we normalize them away rather than reject them.
+function safeContentsPath(path: string): string {
+  const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
+  if (normalized === "") return "";
+  const segments = normalized.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new Error(
+        `Invalid path "${path}": path segments must not be empty, ".", or ".." (no traversal or absolute paths allowed).`,
+      );
+    }
+  }
+  return segments.map((segment) => encodeURIComponent(segment)).join("/");
+}
+
 export async function getFileContents(env: Env, repo: string, path: string, ref?: string) {
   assertRepoAllowed(env, repo);
+  const safePath = safeContentsPath(path);
   const params = ref ? `?ref=${encodeURIComponent(ref)}` : "";
-  const data = (await ghGet(env, `/repos/${repo}/contents/${path}${params}`)) as any;
+  const data = (await ghGet(env, `/repos/${repo}/contents/${safePath}${params}`)) as any;
   if (Array.isArray(data)) {
     // path was a directory
     return { type: "dir", entries: data.map((e: any) => ({ name: e.name, type: e.type, path: e.path })) };
@@ -121,8 +150,28 @@ export async function getFileContents(env: Env, repo: string, path: string, ref?
   return { type: "file", path: data.path, size: data.size, content: null, note: "Non-text or unsupported encoding" };
 }
 
+// GitHub's code search combines multiple `repo:`/`org:`/`user:` qualifiers
+// with OR, not AND. Since we append our own `repo:${repo}` qualifier to
+// scope the search to the allowed repo, a caller-supplied query containing
+// one of these qualifiers (e.g. "repo:other-org/private-repo") doesn't
+// override ours -- it adds a second, unauthorized scope that GitHub unions
+// results from. Reject any query that tries to set its own scope qualifier
+// so the appended `repo:${repo}` remains the only one in effect. The leading
+// character class covers every delimiter GitHub may tokenize a qualifier
+// after -- whitespace, "(", and quotes -- so e.g. `foo"repo:bar` is caught too.
+const SCOPE_QUALIFIER_RE = /(?:^|[\s("'])-?(?:repo|org|user):/i;
+
+function assertNoScopeQualifier(query: string): void {
+  if (SCOPE_QUALIFIER_RE.test(query)) {
+    throw new Error(
+      `Search query must not contain "repo:", "org:", or "user:" qualifiers -- this connector already scopes searches to the allowed repo.`,
+    );
+  }
+}
+
 export async function searchCode(env: Env, repo: string, query: string) {
   assertRepoAllowed(env, repo);
+  assertNoScopeQualifier(query);
   const q = encodeURIComponent(`${query} repo:${repo}`);
   const data = (await ghGet(env, `/search/code?q=${q}&per_page=20`)) as any;
   return (data.items || []).map((it: any) => ({ path: it.path, url: it.html_url }));

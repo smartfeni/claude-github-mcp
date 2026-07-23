@@ -102,7 +102,7 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
 
     this.server.tool(
       "get_file_contents",
-      "Read a file or list a directory's contents at a given path and ref (e.g. README.md, a roadmap doc, or a directory listing).",
+      "Read a file or list a directory's contents at a given path and ref (e.g. README.md, a roadmap doc, or a directory listing). Paths are repo-relative: absolute paths (leading '/') and traversal segments ('.'/'..') are rejected. Use an empty path to list the repo root.",
       { repo: repoParam, path: z.string(), ref: z.string().optional().describe("Branch, tag, or commit SHA.") },
       async ({ repo, path, ref }) => {
         try {
@@ -115,7 +115,7 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
 
     this.server.tool(
       "search_code",
-      "Search code within a single repo (GitHub code search syntax).",
+      "Search code within a single repo (GitHub code search syntax). The search is already scoped to the given repo, so queries may not contain their own 'repo:', 'org:', or 'user:' qualifiers -- those are rejected.",
       { repo: repoParam, query: z.string() },
       async ({ repo, query }) => {
         try {

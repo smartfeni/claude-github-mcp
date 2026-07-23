@@ -31,8 +31,50 @@ interface OAuthHelpers {
   }): Promise<{ redirectTo: string }>;
 }
 
-function renderForm(opts: { clientName: string; error?: string; encodedReq: string }): string {
-  const { clientName, error, encodedReq } = opts;
+// HTML-escapes a string before it's interpolated into a template literal
+// (audit finding #3). `clientName` comes from `lookupClient`, and dynamic
+// client registration is open (`/register` in index.ts), so an attacker can
+// register a client whose name is e.g. "<script>...</script>" and have it
+// reflected, unescaped, into this page's <h1> -- classic reflected XSS
+// against whoever loads the authorize page. `&` must be escaped first so
+// the entities produced for the other characters aren't themselves
+// re-escaped.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Constant-time password comparison (audit finding #4). `password !==
+// env.CONNECTOR_PASSWORD` is a plain string comparison whose running time
+// depends on both the input length and the position of the first
+// mismatched character, which a network attacker can in principle use to
+// recover the password one byte at a time. Hashing both sides to a fixed
+// 32-byte SHA-256 digest first means the buffers being compared are always
+// the same length no matter what the caller submits, and XOR-accumulating
+// every byte (instead of returning as soon as one differs) means the
+// comparison itself always takes the same number of steps.
+async function sha256(input: string): Promise<Uint8Array> {
+  const data = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return new Uint8Array(digest);
+}
+
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const [digestA, digestB] = await Promise.all([sha256(a), sha256(b)]);
+  let diff = 0;
+  for (let i = 0; i < digestA.length; i++) {
+    diff |= digestA[i] ^ digestB[i];
+  }
+  return diff === 0;
+}
+
+export function renderForm(opts: { clientName: string; error?: string; encodedReq: string }): string {
+  const { error, encodedReq } = opts;
+  const clientName = escapeHtml(opts.clientName);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -88,9 +130,19 @@ export async function handleAuthorizePost(request: Request, env: Env & { OAUTH_P
   const form = await request.formData();
   const password = String(form.get("password") || "");
   const encodedReq = String(form.get("oauthReq") || "");
-  const oauthReqInfo: OAuthReqInfo = JSON.parse(atob(encodedReq));
 
-  if (password !== env.CONNECTOR_PASSWORD) {
+  // Audit finding #5: `oauthReq` is attacker-controlled form input. Before
+  // this guard, a malformed value (bad base64, or valid base64 that isn't
+  // JSON) would throw inside atob()/JSON.parse() and bubble up as an
+  // unhandled 500 instead of a clean, expected 400.
+  let oauthReqInfo: OAuthReqInfo;
+  try {
+    oauthReqInfo = JSON.parse(atob(encodedReq));
+  } catch {
+    return new Response("Malformed authorization request.", { status: 400 });
+  }
+
+  if (!(await constantTimeEqual(password, env.CONNECTOR_PASSWORD))) {
     const client = await env.OAUTH_PROVIDER.lookupClient(oauthReqInfo.clientId);
     const html = renderForm({
       clientName: client?.clientName || "Claude",
