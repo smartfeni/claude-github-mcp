@@ -73,8 +73,14 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
 }
 
 export function renderForm(opts: { clientName: string; error?: string; encodedReq: string }): string {
-  const { error, encodedReq } = opts;
+  // Escape every value interpolated into the HTML, not just clientName:
+  // `encodedReq` is submitted as a form field (attacker-controlled) and
+  // `error` is defense-in-depth in case a caller-derived message is ever
+  // passed here. `encodedReq` is base64 in practice, but escaping it costs
+  // nothing and removes the assumption that it always will be.
   const clientName = escapeHtml(opts.clientName);
+  const error = opts.error ? escapeHtml(opts.error) : opts.error;
+  const encodedReq = escapeHtml(opts.encodedReq);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
