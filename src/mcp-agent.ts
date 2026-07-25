@@ -2,7 +2,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  allowedRepos,
+  listRepos,
   listCommits,
   listBranches,
   listPullRequests,
@@ -29,7 +29,7 @@ function errorText(err: unknown) {
 
 const repoParam = z
   .string()
-  .describe('Repository as "owner/name", e.g. "jpalvarezb/bonafe". Must be on this connector\'s allow-list.');
+  .describe('Repository as "owner/name", e.g. "jpalvarezb/bonafe". Any repo the connector\'s GitHub token can read is reachable; call list_repos if unsure what\'s available.');
 
 export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "github-readonly", version: "1.0.0" });
@@ -38,10 +38,16 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
     const env = this.env;
 
     this.server.tool(
-      "list_allowed_repos",
-      "List the repositories this connector is allowed to read. Call this first if unsure what's in scope.",
-      {},
-      async () => text({ allowed_repos: allowedRepos(env) }),
+      "list_repos",
+      "List the repositories this connector's GitHub token can read (most recently pushed first). Call this first if unsure what's available.",
+      { limit: z.number().int().min(1).max(100).default(30) },
+      async ({ limit }) => {
+        try {
+          return text(await listRepos(env, limit));
+        } catch (err) {
+          return errorText(err);
+        }
+      },
     );
 
     this.server.tool(

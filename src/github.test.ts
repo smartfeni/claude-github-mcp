@@ -4,8 +4,8 @@
 // `path` is interpolated unencoded into `/repos/${repo}/contents/${path}`.
 // Because fetch/URL normalizes ".." segments, a path like
 // "../../../../repos/other-org/private-repo/contents/.env" produces a
-// request URL that targets a repo outside ALLOWED_REPOS even though
-// `repo` itself passed assertRepoAllowed.
+// request URL that targets a different repo even though `repo` itself
+// passed the "owner/name" format check.
 //
 // This test must fail (red) against the current, unpatched getFileContents:
 // today the function happily builds the traversal URL and calls fetch with
@@ -14,13 +14,12 @@
 // reaching fetch.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getFileContents, searchCode } from "./github.js";
+import { assertValidRepo, getFileContents, InvalidRepoError, listCommits, searchCode } from "./github.js";
 
 const ALLOWED_REPO = "my-org/my-repo";
 
 function makeEnv(): Env {
   return {
-    ALLOWED_REPOS: ALLOWED_REPO,
     GITHUB_PAT: "test-pat",
     CONNECTOR_PASSWORD: "unused-in-this-test",
   } as unknown as Env;
@@ -100,7 +99,7 @@ describe("getFileContents path traversal (audit finding #1)", () => {
 // concatenated with our own `repo:${repo}` qualifier. Before the fix, a
 // query containing its own "repo:other-org/private-repo" qualifier would
 // not be overridden by ours -- GitHub would union results from both repos,
-// leaking data from a repo that was never checked against ALLOWED_REPOS.
+// leaking results from a repo the caller never named in the `repo` argument.
 //
 // These tests must fail (red) against the unpatched searchCode: today it
 // happily builds the combined query string and calls fetch with it. After
@@ -111,7 +110,6 @@ describe("searchCode qualifier injection (audit finding #2)", () => {
 
   function makeEnv(): Env {
     return {
-      ALLOWED_REPOS: ALLOWED_REPO,
       GITHUB_PAT: "test-pat",
       CONNECTOR_PASSWORD: "unused-in-this-test",
     } as unknown as Env;
@@ -160,5 +158,41 @@ describe("searchCode qualifier injection (audit finding #2)", () => {
     const q = new URL(requestedUrl).searchParams.get("q") || "";
     expect(q).toContain(`repo:${ALLOWED_REPO}`);
     expect(q).toContain("TODO comments");
+  });
+});
+
+// Access model: there is no allow-list. Any well-formed "owner/name" is
+// reachable (bounded only by what the GITHUB_PAT can read), but the format
+// guard must still reject values that could inject extra path/query segments
+// into the GitHub API URL -- that guard is what preserves the finding #1/#2
+// fixes now that an exact-match allow-list no longer doubles as validation.
+describe("repo access model (no allow-list, format-only guard)", () => {
+  function makeEnv(): Env {
+    return { GITHUB_PAT: "test-pat" } as unknown as Env;
+  }
+
+  it("accepts any well-formed repo, not just a fixed pair, and calls that exact repo", async () => {
+    const fetchMock = vi.fn(async (..._args: any[]) => new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listCommits(makeEnv(), "some-other-org/some-other-repo");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const requestedUrl = String(fetchMock.mock.calls[0][0]);
+    expect(requestedUrl).toContain("/repos/some-other-org/some-other-repo/commits");
+  });
+
+  it.each([
+    ["missing slash", "justareponame"],
+    ["extra path segment", "owner/name/extra"],
+    ["traversal", "owner/../../search"],
+    ["query smuggling", "owner/name?foo=bar"],
+    ["space", "owner/na me"],
+  ])("rejects a malformed repo (%s) before any network call", (_label, repo) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(() => assertValidRepo(repo)).toThrow(InvalidRepoError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
