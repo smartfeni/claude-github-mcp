@@ -18,7 +18,7 @@
 
   // Required by @cloudflare/workers-oauth-provider to store grants/tokens (hashes only, no secrets).
   "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "002de4e8a49e4046bcdefe70e7ecc97a" }
+    { "binding": "OAUTH_KV", "id": "988e74aae9e24085b4530860640eeca3" }
   ]
 
   // No repo allow-list: this connector can read any repo the GITHUB_PAT grants.
