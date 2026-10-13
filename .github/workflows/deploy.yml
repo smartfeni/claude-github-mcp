@@ -34,5 +34,5 @@ jobs:
             GITHUB_PAT
             CONNECTOR_PASSWORD
         env:
-          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          GITHUB_PAT: ${{ secrets.GH_PAT }}
           CONNECTOR_PASSWORD: ${{ secrets.CONNECTOR_PASSWORD }}
