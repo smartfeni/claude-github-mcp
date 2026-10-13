@@ -108,24 +108,46 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
 
     this.server.tool(
       "get_file_contents",
-      "Read a file or list a directory's contents at a given path and ref (e.g. README.md, a roadmap doc, or a directory listing). Paths are repo-relative: absolute paths (leading '/') and traversal segments ('.'/'..') are rejected. Use an empty path to list the repo root.",
-      { repo: repoParam, path: z.string(), ref: z.string().optional().describe("Branch, tag, or commit SHA.") },
-      async ({ repo, path, ref }) => {
+      "Read a file or list a directory. Use start_line and end_line to read a specific 1-based line range instead of the whole file.",
+      {
+        repo: repoParam,
+        path: z.string(),
+        ref: z.string().optional().describe("Branch, tag, or commit SHA."),
+        start_line: z.number().int().min(1).optional().describe("First line to return, starting at 1."),
+        end_line: z.number().int().min(1).optional().describe("Last line to return, inclusive."),
+      },
+      async ({ repo, path, ref, start_line, end_line }) => {
         try {
           const result = await getFileContents(env, repo, path, ref);
 
-if (result.type === "file" && result.content !== null) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: result.content ?? "",
-      },
-    ],
-  };
-}
+          if (result.type === "file" && typeof result.content === "string") {
+            const lines = result.content.split("\n");
 
-return text(result);
+            if (start_line !== undefined || end_line !== undefined) {
+              const first = start_line ?? 1;
+              const last = end_line ?? lines.length;
+
+              if (last < first) {
+                throw new Error("end_line must be greater than or equal to start_line.");
+              }
+
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: lines
+                    .slice(first - 1, last)
+                    .map((line, index) => `${first + index}: ${line}`)
+                    .join("\n"),
+                }],
+              };
+            }
+
+            return {
+              content: [{ type: "text" as const, text: result.content ?? "" }],
+            };
+          }
+
+          return text(result);
         } catch (err) {
           return errorText(err);
         }
