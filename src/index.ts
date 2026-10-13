@@ -5,8 +5,8 @@ import { handleAuthorizeGet, handleAuthorizePost } from "./authorize";
 export { GitHubReadOnlyMCP };
 
 const defaultHandler = {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
+  async fetch(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
 
     if (url.pathname === "/authorize") {
       const oauthEnv = env as unknown as Parameters<typeof handleAuthorizeGet>[1];

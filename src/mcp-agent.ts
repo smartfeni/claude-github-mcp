@@ -35,7 +35,7 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "github-readonly", version: "1.0.0" });
 
   async init() {
-    const env = this.env;
+    const env = (this as unknown as { env: Env }).env;
 
     this.server.tool(
       "list_repos",
@@ -112,7 +112,20 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
       { repo: repoParam, path: z.string(), ref: z.string().optional().describe("Branch, tag, or commit SHA.") },
       async ({ repo, path, ref }) => {
         try {
-          return text(await getFileContents(env, repo, path, ref));
+          const result = await getFileContents(env, repo, path, ref);
+
+if (result.type === "file" && result.content !== null) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: result.content ?? "",
+      },
+    ],
+  };
+}
+
+return text(result);
         } catch (err) {
           return errorText(err);
         }
