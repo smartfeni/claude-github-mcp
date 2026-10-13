@@ -14,7 +14,7 @@
 // reaching fetch.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { assertValidRepo, getFileContents, InvalidRepoError, listCommits, searchCode } from "./github.js";
+import { assertValidRepo, getFileContents, getFileHistory, InvalidRepoError, listCommits, searchCode } from "./github.js";
 
 const ALLOWED_REPO = "my-org/my-repo";
 
@@ -151,7 +151,7 @@ describe("searchCode qualifier injection (audit finding #2)", () => {
 
     await searchCode(env, ALLOWED_REPO, "TODO comments");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalled();
     const requestedUrl = String(fetchMock.mock.calls[0][0]);
     // The query is URL-encoded, so decode it back out to check the
     // qualifier landed the way searchCode is supposed to build it.
@@ -194,5 +194,92 @@ describe("repo access model (no allow-list, format-only guard)", () => {
 
     expect(() => assertValidRepo(repo)).toThrow(InvalidRepoError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("getFileHistory", () => {
+  const env = { GITHUB_PAT: "test-pat" } as unknown as Env;
+
+  it("requests commits for the specified file and returns history details", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify([
+      {
+        sha: "abc123",
+        commit: {
+          author: { name: "Test Author", date: "2026-01-01T00:00:00Z" },
+          message: "Update file\n\nMore details",
+        },
+        html_url: "https://github.com/my-org/my-repo/commit/abc123",
+      },
+    ]), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getFileHistory(env, "my-org/my-repo", "src/app.ts", "main", 5);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      sha: "abc123",
+      author: "Test Author",
+      message: "Update file\n\nMore details",
+      url: "https://github.com/my-org/my-repo/commit/abc123",
+    });
+
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(requestedUrl.pathname).toBe("/repos/my-org/my-repo/commits");
+    expect(requestedUrl.searchParams.get("path")).toBe("src/app.ts");
+    expect(requestedUrl.searchParams.get("sha")).toBe("main");
+    expect(requestedUrl.searchParams.get("per_page")).toBe("5");
+  });
+
+  it.each(["../secret.txt", "/absolute.txt", "src/../secret.txt", "src\\\\secret.txt"])(
+    "rejects an unsafe file path before making a request: %s",
+    async (path) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(getFileHistory(env, "my-org/my-repo", path)).rejects.toThrow("Invalid file path.");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+});
+
+
+describe("searchCode line matching", () => {
+  it("returns matching lines with line numbers", async () => {
+    const content = "const TODO = 'comments here';\nother line\n";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/search/code")) {
+        return new Response(JSON.stringify({
+          items: [{
+            path: "src/app.ts",
+            html_url: "https://github.com/my-org/my-repo/blob/main/src/app.ts",
+          }],
+        }), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        type: "file",
+        encoding: "base64",
+        content: btoa(content),
+        path: "src/app.ts",
+        size: content.length,
+      }), { status: 200 });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await searchCode(
+      { GITHUB_PAT: "test-pat" } as unknown as Env,
+      "my-org/my-repo",
+      "TODO comments",
+    );
+
+    expect(result[0].path).toBe("src/app.ts");
+    expect(result[0].matches).toContainEqual({
+      line: 1,
+      text: "const TODO = 'comments here';",
+    });
   });
 });

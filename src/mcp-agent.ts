@@ -8,6 +8,7 @@ import {
   listPullRequests,
   listIssues,
   getFileContents,
+  getFileHistory,
   searchCode,
 } from "./github";
 // Env's GITHUB_PAT/CONNECTOR_PASSWORD augmentation (env.d.ts) is picked up
@@ -148,6 +149,24 @@ export class GitHubReadOnlyMCP extends McpAgent<Env, unknown, Props> {
           }
 
           return text(result);
+        } catch (err) {
+          return errorText(err);
+        }
+      },
+    );
+
+    this.server.tool(
+      "get_file_history",
+      "List commits that changed a specific file. Optionally restrict history to a branch, tag, or commit SHA.",
+      {
+        repo: repoParam,
+        path: z.string().min(1),
+        ref: z.string().optional().describe("Optional branch, tag, or commit SHA."),
+        limit: z.number().int().min(1).max(100).optional().describe("Maximum commits to return; defaults to 20."),
+      },
+      async ({ repo, path, ref, limit }) => {
+        try {
+          return text(await getFileHistory(env, repo, path, ref, limit));
         } catch (err) {
           return errorText(err);
         }

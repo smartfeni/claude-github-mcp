@@ -70,6 +70,46 @@ export async function listCommits(env: Env, repo: string, branch?: string, limit
   }));
 }
 
+export async function getFileHistory(
+  env: Env,
+  repo: string,
+  path: string,
+  ref?: string,
+  limit = 20,
+) {
+  assertValidRepo(repo);
+
+  if (
+    !path ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.split("/").some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("Invalid file path.");
+  }
+
+  const count = Math.max(1, Math.min(100, Math.floor(limit)));
+  const params = new URLSearchParams({
+    path,
+    per_page: String(count),
+  });
+
+  if (ref) params.set("sha", ref);
+
+  const data = (await ghGet(
+    env,
+    `/repos/${repo}/commits?${params.toString()}`,
+  )) as any;
+
+  return (data || []).map((item: any) => ({
+    sha: item.sha,
+    author: item.commit?.author?.name ?? item.author?.login ?? "Unknown",
+    date: item.commit?.author?.date ?? null,
+    message: item.commit?.message ?? "",
+    url: item.html_url,
+  }));
+}
+
 export async function listBranches(env: Env, repo: string) {
   assertValidRepo(repo);
   const data = (await ghGet(env, `/repos/${repo}/branches?per_page=100`)) as any[];
@@ -182,9 +222,55 @@ function assertNoScopeQualifier(query: string): void {
 export async function searchCode(env: Env, repo: string, query: string) {
   assertValidRepo(repo);
   assertNoScopeQualifier(query);
+
   const q = encodeURIComponent(`${query} repo:${repo}`);
   const data = (await ghGet(env, `/search/code?q=${q}&per_page=20`)) as any;
-  return (data.items || []).map((it: any) => ({ path: it.path, url: it.html_url }));
+
+  const items = (data.items || []).slice(0, 10);
+
+  return await Promise.all(items.map(async (it: any) => {
+    const result: {
+      path: string;
+      url: string;
+      matches: { line: number; text: string }[];
+      note?: string;
+    } = {
+      path: it.path,
+      url: it.html_url,
+      matches: [],
+    };
+
+    try {
+      const file = await getFileContents(env, repo, it.path);
+      if (file.type !== "file" || typeof file.content !== "string") {
+        result.note = "File content is unavailable.";
+        return result;
+      }
+
+      const lines = file.content.split("\n");
+      const terms = query
+        .replace(/["']/g, "")
+        .split(/\s+/)
+        .filter((term) => term && !/^(AND|OR|NOT)$/i.test(term) && !/^[*()]+$/.test(term));
+
+      const matched = lines
+        .map((text, index) => ({ line: index + 1, text }))
+        .filter(({ text }) => terms.some((term) =>
+          text.toLowerCase().includes(term.toLowerCase())
+        ))
+        .slice(0, 10);
+
+      result.matches = matched;
+
+      if (matched.length === 0) {
+        result.note = "GitHub found this file, but no literal line match was found for the query. Search syntax may differ from literal text.";
+      }
+    } catch {
+      result.note = "Could not retrieve file contents to extract matching lines.";
+    }
+
+    return result;
+  }));
 }
 
 // Lists the repos the GITHUB_PAT can reach, most-recently-pushed first, so a
